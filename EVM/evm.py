@@ -66,81 +66,94 @@ class Database:
         self._init()
 
     def _conn(self):
-        return sqlite3.connect(self.path)
+        c = sqlite3.connect(self.path)
+        c.execute("PRAGMA journal_mode=WAL")
+        return c
 
     def _init(self):
-        with self._conn() as c:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS votes (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    voter_seq INTEGER,
-                    post      TEXT NOT NULL,
-                    candidate TEXT NOT NULL,
-                    timestamp TEXT NOT NULL
-                )
-            """)
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    start_ts  TEXT NOT NULL,
-                    end_ts    TEXT
-                )
-            """)
-            c.commit()
+        c = self._conn()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS votes (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                voter_seq INTEGER,
+                post      TEXT NOT NULL,
+                candidate TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_ts  TEXT NOT NULL,
+                end_ts    TEXT
+            )
+        """)
+        c.commit()
+        c.close()
 
     def start_session(self):
-        with self._conn() as c:
-            cur = c.execute("INSERT INTO sessions (start_ts) VALUES (?)",
-                            (datetime.now().isoformat(),))
-            c.commit()
-            return cur.lastrowid
+        c = self._conn()
+        cur = c.execute("INSERT INTO sessions (start_ts) VALUES (?)",
+                        (datetime.now().isoformat(),))
+        c.commit()
+        sid = cur.lastrowid
+        c.close()
+        return sid
 
     def close_session(self, sid):
-        with self._conn() as c:
-            c.execute("UPDATE sessions SET end_ts=? WHERE id=?",
-                      (datetime.now().isoformat(), sid))
-            c.commit()
+        c = self._conn()
+        c.execute("UPDATE sessions SET end_ts=? WHERE id=?",
+                  (datetime.now().isoformat(), sid))
+        c.commit()
+        c.close()
 
     def next_voter_seq(self):
-        with self._conn() as c:
-            row = c.execute("SELECT MAX(voter_seq) FROM votes").fetchone()
-            return (row[0] or 0) + 1
+        c = self._conn()
+        row = c.execute("SELECT MAX(voter_seq) FROM votes").fetchone()
+        c.close()
+        return (row[0] or 0) + 1
 
     def save_vote(self, voter_seq, post, candidate):
-        with self._conn() as c:
-            c.execute(
-                "INSERT INTO votes (voter_seq,post,candidate,timestamp) VALUES(?,?,?,?)",
-                (voter_seq, post, candidate, datetime.now().isoformat())
-            )
-            c.commit()
+        c = self._conn()
+        c.execute(
+            "INSERT INTO votes (voter_seq,post,candidate,timestamp) VALUES(?,?,?,?)",
+            (voter_seq, post, candidate, datetime.now().isoformat())
+        )
+        c.commit()
+        c.close()
 
     def get_results(self):
         """Returns {post: {candidate: count}}"""
-        with self._conn() as c:
-            rows = c.execute(
-                "SELECT post, candidate, COUNT(*) FROM votes GROUP BY post, candidate"
-            ).fetchall()
+        c = self._conn()
+        rows = c.execute(
+            "SELECT post, candidate, COUNT(*) FROM votes GROUP BY post, candidate"
+        ).fetchall()
+        c.close()
         results = {}
         for post, cand, cnt in rows:
             results.setdefault(post, {})[cand] = cnt
         return results
 
     def get_audit_log(self):
-        with self._conn() as c:
-            return c.execute(
-                "SELECT id, voter_seq, timestamp, post, candidate FROM votes ORDER BY id"
-            ).fetchall()
+        c = self._conn()
+        rows = c.execute(
+            "SELECT id, voter_seq, timestamp, post, candidate FROM votes ORDER BY id"
+        ).fetchall()
+        c.close()
+        return rows
 
     def total_voters(self):
-        with self._conn() as c:
-            row = c.execute("SELECT COUNT(DISTINCT voter_seq) FROM votes").fetchone()
-            return row[0] or 0
+        c = self._conn()
+        row = c.execute("SELECT COUNT(DISTINCT voter_seq) FROM votes").fetchone()
+        c.close()
+        return row[0] or 0
 
     def reset_election(self):
-        with self._conn() as c:
-            c.execute("DELETE FROM votes")
-            c.execute("DELETE FROM sessions")
-            c.commit()
+        c = self._conn()
+        c.execute("DELETE FROM votes")
+        c.execute("DELETE FROM sessions")
+        c.commit()
+        c.close()
 
     def backup(self):
         import shutil
@@ -282,7 +295,7 @@ def export_excel(db: Database, config: dict, path: str) -> bool:
 #  MAIN APPLICATION
 # ═══════════════════════════════════════════════════════════════════════════
 class EVMApp:
-    KEYMAP = ["a", "b", "c", "d", "e"]
+    KEYMAP = ["1", "2", "3", "4", "5"]
 
     def __init__(self, root: tk.Tk):
         self.root   = root
@@ -313,16 +326,13 @@ class EVMApp:
     # ── Key binding (Keyboard Mode) ───────────────────────────────────────
     def _bind_keys(self):
         for key in self.KEYMAP:
-            self.root.bind(f"<{key}>",
-                lambda e, k=key: self._on_key(k))
-            self.root.bind(f"<{key.upper()}>",
+            self.root.bind(key,
                 lambda e, k=key: self._on_key(k))
         self.root.bind("<Return>",   lambda e: self._on_confirm())
-        self.root.bind("<space>",    lambda e: self._on_start())
-        self.root.bind("<F1>",       lambda e: self._on_start())
+        self.root.bind("0",          lambda e: self._on_start())
 
     def _on_key(self, key):
-        """Called when A/B/C/D/E is pressed."""
+        """Called when 1/2/3/4/5 is pressed."""
         if self.screen == "voting":
             idx = self.KEYMAP.index(key)
             self._select_candidate(idx)
@@ -339,18 +349,18 @@ class EVMApp:
     def arduino_input(self, signal: str):
         """
         Call this method from an Arduino listener thread.
-        signal: "A","B","C","D","E" for candidates, "CONFIRM" to confirm.
+        signal: "1","2","3","4","5" for candidates, "CONFIRM" to confirm.
         Example (future):
-            app.arduino_input("A")
+            app.arduino_input("1")
             app.arduino_input("CONFIRM")
         """
-        signal = signal.upper().strip()
-        if signal in [k.upper() for k in self.KEYMAP]:
-            idx = [k.upper() for k in self.KEYMAP].index(signal)
+        signal = signal.strip()
+        if signal in self.KEYMAP:
+            idx = self.KEYMAP.index(signal)
             self.root.after(0, lambda: self._select_candidate(idx))
-        elif signal == "CONFIRM":
+        elif signal.upper() == "CONFIRM":
             self.root.after(0, self._confirm_vote)
-        elif signal == "START":
+        elif signal.upper() == "START":
             self.root.after(0, self._start_voting)
 
     # ═════════════════════════════════════════════════════════════════════
@@ -442,7 +452,7 @@ class EVMApp:
         start_btn.pack()
         self._hover(start_btn, C["accent2"], C["accent"])
 
-        tk.Label(center, text="(or press  SPACE / F1)",
+        tk.Label(center, text="(or press  0)",
                  bg=C["bg"], fg=C["muted"],
                  font=FONTS["small"]).pack(pady=(12, 0))
 
@@ -496,7 +506,7 @@ class EVMApp:
                  font=FONTS["post"]).pack()
 
         tk.Label(self.main,
-                 text="Press the key next to your choice, then press ENTER to confirm",
+                 text="Press the number next to your choice, then press ENTER to confirm",
                  bg=C["bg"], fg=C["muted"],
                  font=FONTS["small"]).pack(pady=(0, 10))
 
@@ -507,7 +517,7 @@ class EVMApp:
         cand_area.pack(pady=8)
 
         for i, cand in enumerate(candidates):
-            key = self.KEYMAP[i].upper()
+            key = self.KEYMAP[i]
             frame = tk.Frame(cand_area,
                              bg=C["card"],
                              bd=2, relief="flat",
@@ -601,11 +611,43 @@ class EVMApp:
         else:
             self._show_thankyou()
 
+    # ── Beep helper ───────────────────────────────────────────────────────
+    def _beep(self):
+        """Play a confirmation beep in a background thread (non-blocking)."""
+        def _play():
+            try:
+                import winsound                          # Windows
+                winsound.Beep(1000, 200)                 # 1000 Hz, 200 ms
+                import time; time.sleep(0.15)
+                winsound.Beep(1000, 200)
+                time.sleep(0.15)
+                winsound.Beep(1320, 400)                 # higher note to finish
+            except ImportError:
+                try:
+                    import subprocess, sys               # Linux / macOS
+                    if sys.platform == "darwin":
+                        subprocess.Popen(
+                            ["afplay", "/System/Library/Sounds/Glass.aiff"])
+                    else:
+                        result = subprocess.run(
+                            ["beep", "-f", "1000", "-l", "200",
+                             "-D", "100", "-f", "1000", "-l", "200",
+                             "-D", "100", "-f", "1320", "-l", "400"],
+                            capture_output=True
+                        )
+                        if result.returncode != 0:
+                            raise FileNotFoundError
+                except Exception:
+                    # Last resort: ASCII bell via print
+                    print("", end="", flush=True)
+        threading.Thread(target=_play, daemon=True).start()
+
     # ── Thank-you Screen ──────────────────────────────────────────────────
     def _show_thankyou(self):
         self._clear_main()
         self.screen = "thankyou"
         self.db.close_session(self.session_id)
+        self._beep()
 
         center = tk.Frame(self.main, bg=C["bg"])
         center.place(relx=0.5, rely=0.5, anchor="center")
@@ -646,7 +688,7 @@ class EVMApp:
                  font=FONTS["small"]).pack(pady=(0, 20))
 
         next_btn = tk.Button(center,
-                             text="▶   NEXT VOTER  (SPACE / F1)",
+                             text="▶   NEXT VOTER  (press 0)",
                              bg=C["accent"], fg=C["bg"],
                              font=("Segoe UI", 18, "bold"),
                              relief="flat", cursor="hand2",
