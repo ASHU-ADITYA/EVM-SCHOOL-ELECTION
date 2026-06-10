@@ -2,10 +2,11 @@
 EVM - Electronic Voting Machine
 School Election System
 Supports: Keyboard Mode (now) | Arduino Mode (future)
+With Candidate Photo Support & Backward Compatibility
 """
 
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, filedialog
 import sqlite3
 import json
 import os
@@ -13,8 +14,16 @@ import sys
 import hashlib
 from datetime import datetime
 import threading
+import shutil
 
-# ── Optional: Excel export ──────────────────────────────────────────────
+# ── Optional: Image support ────────────────────────────────────────────────
+try:
+    from PIL import Image, ImageTk
+    PILLOW_AVAILABLE = True
+except ImportError:
+    PILLOW_AVAILABLE = False
+
+# ── Optional: Excel export ────────────────────────────────────────────────
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -22,13 +31,18 @@ try:
 except ImportError:
     EXCEL_AVAILABLE = False
 
-# ── Paths ────────────────────────────────────────────────────────────────
+# ── Paths ──────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "election.json")
 DB_PATH     = os.path.join(BASE_DIR, "election.db")
 EXPORT_PATH = os.path.join(BASE_DIR, "Election_Results.xlsx")
+IMAGES_DIR  = os.path.join(BASE_DIR, "images")
 
-# ── Colour palette ───────────────────────────────────────────────────────
+# Create directories if missing
+os.makedirs(IMAGES_DIR, exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "exports"), exist_ok=True)
+
+# ── Colour palette ─────────────────────────────────────────────────────────
 C = {
     "bg":        "#0D1B2A",   # deep navy
     "card":      "#1B2A3B",   # slightly lighter navy
@@ -57,9 +71,34 @@ FONTS = {
     "mono":     ("Courier New", 13),
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+#  HELPER: Extract candidate name (backward compatible)
+# ════════════════════════════════════════════════════════════════════════════
+def candidate_name(candidate):
+    """
+    Extract candidate name from either string or dict format.
+    Supports both legacy and new formats:
+    - String: "Candidate A"
+    - Dict: {"name": "Candidate A", "image": "images/a.jpg"}
+    """
+    if isinstance(candidate, dict):
+        return candidate.get("name", "")
+    return candidate
+
+
+def get_candidate_image(candidate):
+    """
+    Extract image path from candidate dict.
+    Returns None if candidate is string or no image.
+    """
+    if isinstance(candidate, dict):
+        return candidate.get("image")
+    return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  DATABASE
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 class Database:
     def __init__(self, path):
         self.path = path
@@ -113,11 +152,12 @@ class Database:
         c.close()
         return (row[0] or 0) + 1
 
-    def save_vote(self, voter_seq, post, candidate):
+    def save_vote(self, voter_seq, post, candidate_name_str):
+        """Save vote with candidate name (always string, never dict)"""
         c = self._conn()
         c.execute(
             "INSERT INTO votes (voter_seq,post,candidate,timestamp) VALUES(?,?,?,?)",
-            (voter_seq, post, candidate, datetime.now().isoformat())
+            (voter_seq, post, candidate_name_str, datetime.now().isoformat())
         )
         c.commit()
         c.close()
@@ -156,16 +196,15 @@ class Database:
         c.close()
 
     def backup(self):
-        import shutil
         ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = os.path.join(BASE_DIR, f"backup_{ts}.db")
         shutil.copy2(self.path, dst)
         return dst
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 #  CONFIG LOADER
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         # create default config
@@ -183,9 +222,15 @@ def load_config():
         return json.load(f)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  EXCEL EXPORTER
-# ═══════════════════════════════════════════════════════════════════════════
+def save_config(config):
+    """Save config to election.json"""
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  EXCEL EXPORTER (with backward compatible candidate names)
+# ════════════════════════════════════════════════════════════════════════════
 def export_excel(db: Database, config: dict, path: str) -> bool:
     if not EXCEL_AVAILABLE:
         return False
@@ -193,7 +238,7 @@ def export_excel(db: Database, config: dict, path: str) -> bool:
     wb  = openpyxl.Workbook()
     results = db.get_results()
 
-    # ── Results sheet ────────────────────────────────────────────
+    # ── Results sheet ──────────────────────────────────────────
     ws = wb.active
     ws.title = "Results"
 
@@ -239,11 +284,13 @@ def export_excel(db: Database, config: dict, path: str) -> bool:
         row += 1
 
         post_votes = results.get(post_name, {})
+        # Convert candidates to names and sort
         ranked = sorted(candidates,
-                        key=lambda x: post_votes.get(x, 0), reverse=True)
+                        key=lambda x: post_votes.get(candidate_name(x), 0), reverse=True)
         for cand in ranked:
-            votes = post_votes.get(cand, 0)
-            for col, val in enumerate([post_name, cand, votes], 1):
+            cand_name_str = candidate_name(cand)
+            votes = post_votes.get(cand_name_str, 0)
+            for col, val in enumerate([post_name, cand_name_str, votes], 1):
                 c = ws.cell(row=row, column=col, value=val)
                 c.font      = body_font
                 c.alignment = ctr
@@ -291,9 +338,33 @@ def export_excel(db: Database, config: dict, path: str) -> bool:
     return True
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+#  IMAGE LOADER (with error handling)
+# ════════════════════════════════════════════════════════════════════════════
+def load_image(image_path, size=(80, 80)):
+    """
+    Load and resize image from path.
+    Returns PhotoImage or None if image not found/corrupted.
+    """
+    if not PILLOW_AVAILABLE:
+        return None
+    
+    try:
+        if not os.path.exists(image_path):
+            return None
+        
+        img = Image.open(image_path)
+        img.thumbnail(size, Image.Resampling.LANCZOS)
+        # Convert to PhotoImage
+        return ImageTk.PhotoImage(img)
+    except Exception as e:
+        # Silently fail for corrupted images
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  MAIN APPLICATION
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 class EVMApp:
     KEYMAP = ["1", "2", "3", "4", "5"]
 
@@ -303,13 +374,14 @@ class EVMApp:
         self.db     = Database(DB_PATH)
         self.posts  = list(self.config["posts"].items())  # [(post, [cands])]
         self.input_mode = "keyboard"  # "keyboard" | "arduino"
+        self.photo_cache = []  # Prevent Tkinter images from being garbage collected
 
         self._setup_window()
         self._build_ui()
         self._bind_keys()
         self.show_welcome()
 
-    # ── Window setup ─────────────────────────────────────────────────────
+    # ── Window setup ───────────────────────────────────────────────────────
     def _setup_window(self):
         title = self.config.get("election_title", "SCHOOL ELECTION 2026")
         self.root.title(title)
@@ -323,7 +395,7 @@ class EVMApp:
         # Do nothing during voting; handled via admin
         pass
 
-    # ── Key binding (Keyboard Mode) ───────────────────────────────────────
+    # ── Key binding (Keyboard Mode) ────────────────────────────────────────
     def _bind_keys(self):
         for key in self.KEYMAP:
             self.root.bind(key,
@@ -345,7 +417,7 @@ class EVMApp:
         if self.screen in ("welcome", "thankyou"):
             self._start_voting()
 
-    # ── Arduino hook (future) ─────────────────────────────────────────────
+    # ── Arduino hook (future) ──────────────────────────────────────────────
     def arduino_input(self, signal: str):
         """
         Call this method from an Arduino listener thread.
@@ -363,11 +435,11 @@ class EVMApp:
         elif signal.upper() == "START":
             self.root.after(0, self._start_voting)
 
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     #  UI BUILDER
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     def _build_ui(self):
-        # ── Top bar (always visible) ──────────────────────────────────────
+        # ── Top bar (always visible) ────────────────────────────────────────
         self.topbar = tk.Frame(self.root, bg=C["card"], height=54)
         self.topbar.pack(fill="x", side="top")
         self.topbar.pack_propagate(False)
@@ -391,7 +463,7 @@ class EVMApp:
                   command=self._open_admin,
                   padx=8, pady=2).pack(side="right", padx=8)
 
-        # ── Main content area ─────────────────────────────────────────────
+        # ── Main content area ──────────────────────────────────────────────
         self.main = tk.Frame(self.root, bg=C["bg"])
         self.main.pack(fill="both", expand=True)
 
@@ -400,7 +472,7 @@ class EVMApp:
         self.current_selection = None   # index into candidates list
         self.voter_seq = 1
         self.session_id = None
-        self.session_votes = {}  # {post: candidate}
+        self.session_votes = {}  # {post: candidate_name}
 
     def _tick_clock(self):
         self.clock_label.config(
@@ -410,12 +482,14 @@ class EVMApp:
     def _clear_main(self):
         for w in self.main.winfo_children():
             w.destroy()
+        # Clear photo cache when screen changes
+        self.photo_cache = []
 
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     #  SCREENS
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
 
-    # ── Welcome Screen ────────────────────────────────────────────────────
+    # ── Welcome Screen ─────────────────────────────────────────────────────
     def show_welcome(self):
         self._clear_main()
         self.screen = "welcome"
@@ -464,7 +538,7 @@ class EVMApp:
                  font=FONTS["small"]).place(relx=0, rely=1.0, anchor="sw",
                                             relwidth=1)
 
-    # ── Voting Screen ─────────────────────────────────────────────────────
+    # ── Voting Screen ──────────────────────────────────────────────────────
     def _start_voting(self):
         self.current_post_idx  = 0
         self.current_selection = None
@@ -518,6 +592,9 @@ class EVMApp:
 
         for i, cand in enumerate(candidates):
             key = self.KEYMAP[i]
+            cand_name_str = candidate_name(cand)
+            image_path = get_candidate_image(cand)
+            
             frame = tk.Frame(cand_area,
                              bg=C["card"],
                              bd=2, relief="flat",
@@ -534,8 +611,20 @@ class EVMApp:
                                width=4)
             key_lbl.pack(side="left", padx=(0, 16))
 
+            # Load and display candidate photo if available
+            if image_path and os.path.exists(os.path.join(BASE_DIR, image_path)):
+                try:
+                    photo = load_image(os.path.join(BASE_DIR, image_path), size=(80, 80))
+                    if photo:
+                        img_lbl = tk.Label(inner, image=photo, bg=C["card"])
+                        img_lbl.image = photo  # Keep reference
+                        self.photo_cache.append(photo)
+                        img_lbl.pack(side="left", padx=(0, 12))
+                except Exception:
+                    pass  # Silently skip if image can't be loaded
+
             name_lbl = tk.Label(inner,
-                                text=cand,
+                                text=cand_name_str,
                                 bg=C["card"], fg=C["white"],
                                 font=FONTS["cand"],
                                 anchor="w")
@@ -585,8 +674,9 @@ class EVMApp:
         inner.config(bg=C["selected"])
         name_lbl.config(bg=C["selected"], fg=C["accent"])
 
+        selected_name = candidate_name(candidates[idx])
         self.selection_label.config(
-            text=f"✔  You selected:  {candidates[idx]}"
+            text=f"✔  You selected:  {selected_name}"
         )
         self.confirm_btn.config(
             state="normal",
@@ -600,9 +690,12 @@ class EVMApp:
             return
         post_name, candidates = self.posts[self.current_post_idx]
         chosen = candidates[self.current_selection]
+        
+        # Extract name from candidate (handles both string and dict)
+        chosen_name = candidate_name(chosen)
 
-        self.session_votes[post_name] = chosen
-        self.db.save_vote(self.voter_seq, post_name, chosen)
+        self.session_votes[post_name] = chosen_name
+        self.db.save_vote(self.voter_seq, post_name, chosen_name)
 
         # Next post or finish
         self.current_post_idx += 1
@@ -611,7 +704,7 @@ class EVMApp:
         else:
             self._show_thankyou()
 
-    # ── Beep helper ───────────────────────────────────────────────────────
+    # ── Beep helper ────────────────────────────────────────────────────────
     def _beep(self):
         """Play a confirmation beep in a background thread (non-blocking)."""
         def _play():
@@ -639,10 +732,10 @@ class EVMApp:
                             raise FileNotFoundError
                 except Exception:
                     # Last resort: ASCII bell via print
-                    print("", end="", flush=True)
+                    print("", end="", flush=True)
         threading.Thread(target=_play, daemon=True).start()
 
-    # ── Thank-you Screen ──────────────────────────────────────────────────
+    # ── Thank-you Screen ───────────────────────────────────────────────────
     def _show_thankyou(self):
         self._clear_main()
         self.screen = "thankyou"
@@ -676,9 +769,9 @@ class EVMApp:
         tk.Label(summary, text="Your Choices",
                  bg=C["card"], fg=C["accent"],
                  font=("Segoe UI", 13, "bold")).pack()
-        for post, cand in self.session_votes.items():
+        for post, cand_name in self.session_votes.items():
             tk.Label(summary,
-                     text=f"  {post}:  {cand}",
+                     text=f"  {post}:  {cand_name}",
                      bg=C["card"], fg=C["white"],
                      font=("Segoe UI", 12)).pack(anchor="w")
 
@@ -697,9 +790,9 @@ class EVMApp:
         next_btn.pack()
         self._hover(next_btn, C["accent2"], C["accent"])
 
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     #  ADMIN PANEL
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     def _open_admin(self):
         pwd = simpledialog.askstring(
             "Admin Login", "Enter Admin Password:",
@@ -716,7 +809,7 @@ class EVMApp:
         win = tk.Toplevel(self.root)
         win.title("Admin Panel")
         win.configure(bg=C["admin_bg"])
-        win.geometry("700x560")
+        win.geometry("700x620")
         win.resizable(False, False)
         win.grab_set()
 
@@ -748,6 +841,7 @@ class EVMApp:
         make_btn("📊  View Results",      C["green"],    lambda: self._admin_results(win))
         make_btn("📥  Export Excel",       C["accent"],   lambda: self._admin_export(win))
         make_btn("📈  Election Statistics",C["selected"], lambda: self._admin_stats(win))
+        make_btn("🖼  Manage Candidate Photos", C["muted"], lambda: self._manage_photos(win))
         make_btn("🗑   Reset Election",     C["red"],      lambda: self._admin_reset(win))
         make_btn("💾  Backup Database",    C["border"],   lambda: self._admin_backup(win))
 
@@ -756,7 +850,7 @@ class EVMApp:
                   font=("Segoe UI", 12), relief="flat",
                   cursor="hand2", command=win.destroy).pack(pady=(16, 0))
 
-    # ── View Results ──────────────────────────────────────────────────────
+    # ── View Results ───────────────────────────────────────────────────────
     def _admin_results(self, parent):
         win = tk.Toplevel(parent)
         win.title("Live Results")
@@ -789,17 +883,19 @@ class EVMApp:
                      anchor="w").pack(fill="x", pady=(12, 2))
 
             post_votes = results.get(post_name, {})
-            max_votes  = max((post_votes.get(c, 0) for c in candidates), default=1)
+            # Convert candidates to names for sorting and voting lookup
+            cand_names = [candidate_name(c) for c in candidates]
+            max_votes = max((post_votes.get(name, 0) for name in cand_names), default=1)
 
-            for cand in sorted(candidates,
-                               key=lambda x: post_votes.get(x, 0), reverse=True):
-                votes = post_votes.get(cand, 0)
+            for cand in candidates:
+                cand_name_str = candidate_name(cand)
+                votes = post_votes.get(cand_name_str, 0)
                 pct   = votes / max_votes if max_votes else 0
 
                 row = tk.Frame(inner, bg=C["bg"])
                 row.pack(fill="x", pady=2)
 
-                tk.Label(row, text=f"{cand:<28}",
+                tk.Label(row, text=f"{cand_name_str:<28}",
                          bg=C["bg"], fg=C["white"],
                          font=FONTS["admin"], width=28, anchor="w").pack(side="left")
 
@@ -822,7 +918,7 @@ class EVMApp:
                   font=FONTS["small"], relief="flat",
                   command=win.destroy, padx=20).pack(pady=12)
 
-    # ── Export Excel ──────────────────────────────────────────────────────
+    # ── Export Excel ───────────────────────────────────────────────────────
     def _admin_export(self, parent):
         if not EXCEL_AVAILABLE:
             messagebox.showerror("Error",
@@ -836,7 +932,7 @@ class EVMApp:
         except Exception as ex:
             messagebox.showerror("Export Failed", str(ex), parent=parent)
 
-    # ── Statistics ────────────────────────────────────────────────────────
+    # ── Statistics ─────────────────────────────────────────────────────────
     def _admin_stats(self, parent):
         win = tk.Toplevel(parent)
         win.title("Election Statistics")
@@ -861,9 +957,12 @@ class EVMApp:
         ]
         for post_name, candidates in self.config["posts"].items():
             post_votes = results.get(post_name, {})
-            winner = max(candidates,
-                         key=lambda x: post_votes.get(x, 0),
-                         default="No votes yet")
+            # Find leader using candidate names
+            winner = max(
+                (candidate_name(c) for c in candidates),
+                key=lambda x: post_votes.get(x, 0),
+                default="No votes yet"
+            )
             stats.append((f"  {post_name} Leader", winner))
 
         frame = tk.Frame(win, bg=C["card"], padx=24, pady=16)
@@ -884,7 +983,115 @@ class EVMApp:
                   font=FONTS["small"], relief="flat",
                   command=win.destroy, padx=20).pack(pady=14)
 
-    # ── Reset Election ────────────────────────────────────────────────────
+    # ── Manage Candidate Photos ────────────────────────────────────────────
+    def _manage_photos(self, parent):
+        win = tk.Toplevel(parent)
+        win.title("Manage Candidate Photos")
+        win.configure(bg=C["bg"])
+        win.geometry("500x400")
+        win.grab_set()
+
+        tk.Label(win, text="MANAGE CANDIDATE PHOTOS",
+                 bg=C["bg"], fg=C["accent"],
+                 font=("Segoe UI", 18, "bold")).pack(pady=(20, 10))
+
+        # Post selection
+        tk.Label(win, text="Select Post:",
+                 bg=C["bg"], fg=C["white"],
+                 font=("Segoe UI", 12)).pack(pady=(10, 4))
+        
+        posts_list = list(self.config["posts"].keys())
+        post_var = tk.StringVar(value=posts_list[0] if posts_list else "")
+        post_menu = tk.OptionMenu(win, post_var, *posts_list)
+        post_menu.config(bg=C["card"], fg=C["white"], font=("Segoe UI", 11))
+        post_menu.pack(pady=4)
+
+        # Candidate selection (will be updated when post changes)
+        tk.Label(win, text="Select Candidate:",
+                 bg=C["bg"], fg=C["white"],
+                 font=("Segoe UI", 12)).pack(pady=(10, 4))
+        
+        cand_var = tk.StringVar()
+        cand_menu = tk.OptionMenu(win, cand_var, "")
+        cand_menu.config(bg=C["card"], fg=C["white"], font=("Segoe UI", 11))
+        cand_menu.pack(pady=4)
+
+        def update_candidates(post_name):
+            candidates = self.config["posts"].get(post_name, [])
+            cand_names = [candidate_name(c) for c in candidates]
+            menu = cand_menu["menu"]
+            menu.delete(0, "end")
+            for name in cand_names:
+                menu.add_command(label=name, command=lambda v=name: cand_var.set(v))
+            if cand_names:
+                cand_var.set(cand_names[0])
+
+        def on_post_change(*args):
+            update_candidates(post_var.get())
+
+        post_var.trace("write", on_post_change)
+        update_candidates(post_var.get())
+
+        # Image file selection button
+        def select_image():
+            post_name = post_var.get()
+            cand_name = cand_var.get()
+            
+            if not post_name or not cand_name:
+                messagebox.showerror("Error", "Please select both post and candidate.", parent=win)
+                return
+
+            file_path = filedialog.askopenfilename(
+                parent=win,
+                title="Select Candidate Image",
+                filetypes=[("Image files", "*.jpg *.jpeg *.png *.gif"), ("All files", "*.*")]
+            )
+            
+            if not file_path:
+                return
+
+            try:
+                # Copy image to images directory
+                filename = os.path.basename(file_path)
+                dest_path = os.path.join(IMAGES_DIR, filename)
+                shutil.copy2(file_path, dest_path)
+
+                # Find candidate in config and update it
+                candidates = self.config["posts"][post_name]
+                for i, cand in enumerate(candidates):
+                    if candidate_name(cand) == cand_name:
+                        # Update candidate to dict format if it isn't already
+                        if isinstance(cand, str):
+                            self.config["posts"][post_name][i] = {
+                                "name": cand,
+                                "image": f"images/{filename}"
+                            }
+                        else:
+                            self.config["posts"][post_name][i]["image"] = f"images/{filename}"
+                        break
+
+                # Save config and reload
+                save_config(self.config)
+                self.posts = list(self.config["posts"].items())
+                
+                messagebox.showinfo("Success", 
+                    f"Image saved for {cand_name}:\n{dest_path}", 
+                    parent=win)
+            except Exception as ex:
+                messagebox.showerror("Error", f"Failed to save image:\n{str(ex)}", parent=win)
+
+        tk.Button(win, text="📁  Select Image",
+                  bg=C["accent"], fg=C["bg"],
+                  font=("Segoe UI", 12, "bold"),
+                  relief="flat", cursor="hand2",
+                  command=select_image, padx=20, pady=10).pack(pady=(20, 10))
+
+        tk.Button(win, text="Close",
+                  bg=C["border"], fg=C["white"],
+                  font=FONTS["small"], relief="flat",
+                  command=win.destroy, padx=20).pack(pady=10)
+
+    # ── Reset Election ─────────────────────────────────────────────────────
     def _admin_reset(self, parent):
         if not messagebox.askyesno(
                 "Confirm Reset",
@@ -901,7 +1108,7 @@ class EVMApp:
         else:
             messagebox.showinfo("Cancelled", "Reset cancelled.", parent=parent)
 
-    # ── Backup ────────────────────────────────────────────────────────────
+    # ── Backup ─────────────────────────────────────────────────────────────
     def _admin_backup(self, parent):
         try:
             path = self.db.backup()
@@ -910,23 +1117,23 @@ class EVMApp:
         except Exception as ex:
             messagebox.showerror("Backup Failed", str(ex), parent=parent)
 
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     #  HELPERS
-    # ═════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     @staticmethod
     def _hover(btn, on_color, off_color):
         btn.bind("<Enter>", lambda e: btn.config(bg=on_color))
         btn.bind("<Leave>", lambda e: btn.config(bg=off_color))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 def main():
     root = tk.Tk()
     app  = EVMApp(root)
 
-    # ── Arduino future hook ──────────────────────────────────────────────
+    # ── Arduino future hook ────────────────────────────────────────────────
     # To enable Arduino mode, start a thread here that reads from serial port
     # and calls app.arduino_input("A"), app.arduino_input("CONFIRM"), etc.
     #
