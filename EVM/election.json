@@ -1,21 +1,90 @@
 {
-  "election_title": "Indus Academy Student Council Election 2026/2027 ",
+  "election_title": "Indus Academy Student Council Election 2026/2027",
   "admin_password": "admin left the chat",
   "posts": {
-    "Head Boy": [
-      "Rahul Sharma",
-      "Arjun Das",
-      "Rohan Gupta"
+    "Head boy": [
+      {
+        "name": "Aiatijya M Parashar",
+        "image": ""
+      },
+      {
+        "name": "Rishab Baruah",
+        "image": ""
+      }
     ],
     "Head Girl": [
-      "Priya Das",
-      "Sneha Roy",
-      "Ananya Singh"
+      {
+        "name": "Dikshita Thakuria",
+        "image": ""
+      },
+      {
+        "name": "Kuhelik k kashyap",
+        "image": ""
+      }
     ],
-    "sports captain": [
-      "Priya Das",
-      "Sneha Roy",
-      "Ananya Singh"
+    "Asst. Head Boy": [
+      {
+        "name": "Chanayaka s saikia",
+        "image": ""
+      },
+      {
+        "name": "Abraneel Bhargav Saikia",
+        "image": ""
+      },
+      {
+        "name": "Mehaan Kumar",
+        "image": ""
+      }
+    ],
+    "Asst. Head Girl": [
+      {
+        "name": "Tanisha Ahmed",
+        "image": ""
+      },
+      {
+        "name": "Udbhashita Bhuyan",
+        "image": ""
+      }
+    ],
+    "Cultural secretary Boy": [
+      {
+        "name": "Ayush Bora",
+        "image": ""
+      },
+      {
+        "name": "Hriday Jyoti Das",
+        "image": ""
+      }
+    ],
+    "Cultural secretary Girl": [
+      {
+        "name": "Jagriti Deuri",
+        "image": ""
+      },
+      {
+        "name": "Riya Barman",
+        "image": ""
+      }
+    ],
+    "Sports secretary Boy": [
+      {
+        "name": "Jeet Chetry",
+        "image": ""
+      },
+      {
+        "name": "Poran Jyoti Deka",
+        "image": ""
+      }
+    ],
+    "Sports secretary Girl": [
+      {
+        "name": "Daizy Sarmah",
+        "image": ""
+      },
+      {
+        "name": "Biprajita Basumatary",
+        "image": ""
+      }
     ]
   }
 }
