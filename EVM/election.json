@@ -1,0 +1,21 @@
+{
+  "election_title": "SCHOOL ELECTION 2026",
+  "admin_password": "admin123",
+  "posts": {
+    "Head Boy": [
+      "Rahul Sharma",
+      "Arjun Das",
+      "Rohan Gupta"
+    ],
+    "Head Girl": [
+      "Priya Das",
+      "Sneha Roy",
+      "Ananya Singh"
+    ],
+    "sports captain": [
+      "Priya Das",
+      "Sneha Roy",
+      "Ananya Singh"
+    ]
+  }
+}
