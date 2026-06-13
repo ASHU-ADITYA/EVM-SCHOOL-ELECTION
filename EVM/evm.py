@@ -31,12 +31,13 @@ try:
 except ImportError:
     EXCEL_AVAILABLE = False
 
-# ── Paths ──────────────────────────────────────────────────────────────────
+# ── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "election.json")
 DB_PATH     = os.path.join(BASE_DIR, "election.db")
 EXPORT_PATH = os.path.join(BASE_DIR, "Election_Results.xlsx")
 IMAGES_DIR  = os.path.join(BASE_DIR, "images")
+LOGO_PATH   = os.path.join(IMAGES_DIR, "school_logo.png")
 
 # Create directories if missing
 os.makedirs(IMAGES_DIR, exist_ok=True)
@@ -375,6 +376,7 @@ class EVMApp:
         self.posts  = list(self.config["posts"].items())  # [(post, [cands])]
         self.input_mode = "keyboard"  # "keyboard" | "arduino"
         self.photo_cache = []  # Prevent Tkinter images from being garbage collected
+        self.logo_photo = None  # Keep reference to logo image
 
         self._setup_window()
         self._build_ui()
@@ -485,6 +487,18 @@ class EVMApp:
         # Clear photo cache when screen changes
         self.photo_cache = []
 
+    def _load_logo(self, size=(120, 120)):
+        """Load school logo image"""
+        if not PILLOW_AVAILABLE or not os.path.exists(LOGO_PATH):
+            return None
+        
+        try:
+            img = Image.open(LOGO_PATH)
+            img.thumbnail(size, Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+
     # ═══════════════════════════════════════════════════════════════════════
     #  SCREENS
     # ═══════════════════════════════════════════════════════════════════════
@@ -493,6 +507,16 @@ class EVMApp:
     def show_welcome(self):
         self._clear_main()
         self.screen = "welcome"
+
+        # Logo at top center
+        logo_frame = tk.Frame(self.main, bg=C["bg"])
+        logo_frame.pack(pady=(20, 10))
+        
+        logo_photo = self._load_logo(size=(120, 120))
+        if logo_photo:
+            self.logo_photo = logo_photo
+            logo_label = tk.Label(logo_frame, image=logo_photo, bg=C["bg"])
+            logo_label.pack()
 
         center = tk.Frame(self.main, bg=C["bg"])
         center.place(relx=0.5, rely=0.5, anchor="center")
@@ -564,9 +588,20 @@ class EVMApp:
                  width=int(self.root.winfo_screenwidth() * pct)
                  ).pack(side="left")
 
-        # Post counter
-        nav_bar = tk.Frame(self.main, bg=C["bg"], pady=8)
-        nav_bar.pack(fill="x")
+        # Top section with logo on left and nav on right
+        top_section = tk.Frame(self.main, bg=C["bg"])
+        top_section.pack(fill="x", padx=20, pady=(10, 0))
+
+        # Logo on top left
+        logo_photo = self._load_logo(size=(80, 80))
+        if logo_photo:
+            self.logo_photo = logo_photo
+            logo_label = tk.Label(top_section, image=logo_photo, bg=C["bg"])
+            logo_label.pack(side="left")
+
+        # Post counter on right
+        nav_bar = tk.Frame(top_section, bg=C["bg"])
+        nav_bar.pack(side="right")
         tk.Label(nav_bar,
                  text=f"Post  {self.current_post_idx+1}  of  {total_posts}",
                  bg=C["bg"], fg=C["muted"],
@@ -741,6 +776,16 @@ class EVMApp:
         self.screen = "thankyou"
         self.db.close_session(self.session_id)
         self._beep()
+
+        # Logo at top center
+        logo_frame = tk.Frame(self.main, bg=C["bg"])
+        logo_frame.pack(pady=(20, 10))
+        
+        logo_photo = self._load_logo(size=(120, 120))
+        if logo_photo:
+            self.logo_photo = logo_photo
+            logo_label = tk.Label(logo_frame, image=logo_photo, bg=C["bg"])
+            logo_label.pack()
 
         center = tk.Frame(self.main, bg=C["bg"])
         center.place(relx=0.5, rely=0.5, anchor="center")
@@ -1108,7 +1153,7 @@ class EVMApp:
         else:
             messagebox.showinfo("Cancelled", "Reset cancelled.", parent=parent)
 
-    # ── Backup ─────────────────────────────────────────────────────────────
+    # ── Backup ──────────────────────────────────────────────────────────────
     def _admin_backup(self, parent):
         try:
             path = self.db.backup()
