@@ -37,7 +37,14 @@ CONFIG_PATH = os.path.join(BASE_DIR, "election.json")
 DB_PATH     = os.path.join(BASE_DIR, "election.db")
 EXPORT_PATH = os.path.join(BASE_DIR, "Election_Results.xlsx")
 IMAGES_DIR  = os.path.join(BASE_DIR, "images")
-LOGO_PATH   = os.path.join(IMAGES_DIR, "school_logo.png")
+
+# Logo path - try both PNG and JPG
+LOGO_PATH = None
+for logo_file in ["school_logo.jpg", "school_logo.png", "school_logo.jpeg"]:
+    logo_candidate = os.path.join(IMAGES_DIR, logo_file)
+    if os.path.exists(logo_candidate):
+        LOGO_PATH = logo_candidate
+        break
 
 # Create directories if missing
 os.makedirs(IMAGES_DIR, exist_ok=True)
@@ -489,10 +496,13 @@ class EVMApp:
 
     def _load_logo(self, size=(120, 120)):
         """Load school logo image"""
-        if not PILLOW_AVAILABLE or not os.path.exists(LOGO_PATH):
+        if not PILLOW_AVAILABLE or not LOGO_PATH:
             return None
         
         try:
+            if not os.path.exists(LOGO_PATH):
+                return None
+            
             img = Image.open(LOGO_PATH)
             img.thumbnail(size, Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(img)
