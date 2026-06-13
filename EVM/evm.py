@@ -31,12 +31,21 @@ try:
 except ImportError:
     EXCEL_AVAILABLE = False
 
+# ── Optional: Audio support (pygame) ────────────────────────────────────────
+try:
+    import pygame
+    pygame.mixer.init()
+    PYGAME_AVAILABLE = True
+except (ImportError, Exception):
+    PYGAME_AVAILABLE = False
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "election.json")
 DB_PATH     = os.path.join(BASE_DIR, "election.db")
 EXPORT_PATH = os.path.join(BASE_DIR, "Election_Results.xlsx")
 IMAGES_DIR  = os.path.join(BASE_DIR, "images")
+SOUNDS_DIR  = os.path.join(BASE_DIR, "sounds")
 
 # Logo path - try both PNG and JPG
 LOGO_PATH = None
@@ -46,8 +55,12 @@ for logo_file in ["school_logo.jpg", "school_logo.png", "school_logo.jpeg"]:
         LOGO_PATH = logo_candidate
         break
 
+# Beep sound path
+BEEP_SOUND_PATH = os.path.join(SOUNDS_DIR, "evm_beep.mp3")
+
 # Create directories if missing
 os.makedirs(IMAGES_DIR, exist_ok=True)
+os.makedirs(SOUNDS_DIR, exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "exports"), exist_ok=True)
 
 # ── Colour palette ─────────────────────────────────────────────────────────
@@ -749,10 +762,19 @@ class EVMApp:
         else:
             self._show_thankyou()
 
-    # ── Beep helper ────────────────────────────────────────────────────────
+    # ── Beep/Sound helper ───────────────────────────────────────────────────
     def _beep(self):
-        """Play a confirmation beep in a background thread (non-blocking)."""
+        """Play confirmation sound from MP3 file or fallback to system beep."""
         def _play():
+            # Try to play MP3 using pygame
+            if PYGAME_AVAILABLE and os.path.exists(BEEP_SOUND_PATH):
+                try:
+                    pygame.mixer.Sound(BEEP_SOUND_PATH).play()
+                    return
+                except Exception:
+                    pass  # Fall through to system beep
+            
+            # Fallback to system beep
             try:
                 import winsound                          # Windows
                 winsound.Beep(1000, 200)                 # 1000 Hz, 200 ms
